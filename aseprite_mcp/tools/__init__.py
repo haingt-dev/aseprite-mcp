@@ -16,3 +16,5 @@ from . import analysis
 from . import slices
 from . import tilemap
 from . import script
+from . import chimera_qa
+from . import native_fx

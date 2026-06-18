@@ -9,6 +9,12 @@ dependencies = [
     "mcp[cli]>=1.6.0",
 ]
 
+[project.optional-dependencies]
+chimera = [
+    "numpy>=2.4.6",
+    "pillow>=12.2.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
