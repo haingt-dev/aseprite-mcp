@@ -332,3 +332,90 @@ async def kcentroid_downscale(
     except Exception as e:  # noqa: BLE001 — surface any PIL/numpy failure as a tool error
         return f"Failed to downscale: {e}"
     return f"Downscaled to {target_width}x{target_height} ({n_colors} colours) -> {out}"
+
+
+@mcp.tool()
+async def value_blockin_downscale(
+    input_path: str,
+    output_path: str,
+    target_width: int,
+    target_height: int,
+    levels: int = 5,
+    supersample: int = 0,
+    normalize: bool = True,
+) -> str:
+    """Value-first block-in downscale — the *predictable* Stage-2 primitive for hand-authoring.
+
+    Pipeline (value-only; colour comes LAST, by hand):
+      grayscale -> [autocontrast] -> posterize to N levels -> integer-ratio MODE downscale.
+
+    Unlike kcentroid_downscale (k-means *averages* per tile, so on a smooth render it invents
+    hundreds of intermediate values), this snaps the image to N chosen grays FIRST, then each
+    output pixel is the MOST-FREQUENT existing value in its tile (mode). The output is therefore
+    GUARANTEED a subset of the N levels — 0 invented values, fully predictable. Proven on a real
+    NINE render: kCentroid = 256 values / 5668 orphans vs this = N values / 0 invented.
+
+    Use this to turn a value-rendered illustration into a clean N-value silhouette + value
+    block-in to refine by hand (shape -> shading -> techniques -> colour LAST). Output is a
+    grayscale PNG; drop it into an RGB sprite as a layer to start refining. Requires the optional
+    `chimera` dependency group (numpy + pillow).
+
+    Args:
+        input_path: source image (a value-render; any PIL-readable)
+        output_path: destination PNG (grayscale block-in)
+        target_width: output width in pixels
+        target_height: output height in pixels
+        levels: number of value steps to posterize to (>= 2; default 5)
+        supersample: working resolution = supersample x target — the integer downscale ratio
+            ("input = Kx sprite"). 0 = AUTO (recommended): picks K so the working res ≈ source,
+            which sits at the orphan floor for any target size (K-sweep, 2026-06-19). Pass an
+            explicit K to override.
+        normalize: autocontrast to the full value range before posterize (default True)
+
+    Returns:
+        success string: dims, the K used, the N chosen level values, unique count, invented count (=0)
+    """
+    if not os.path.exists(input_path):
+        return f"File {input_path} not found"
+    if target_width <= 0 or target_height <= 0:
+        return "Invalid input: target_width and target_height must be > 0"
+    if levels < 2:
+        return "Invalid input: levels must be >= 2"
+    if supersample < 0:
+        return "Invalid input: supersample must be >= 0 (0 = auto)"
+    err = reject_traversal(output_path)
+    if err:
+        return err
+    out = output_path if output_path.lower().endswith(".png") else f"{output_path}.png"
+    try:
+        import numpy as np
+        from PIL import Image, ImageOps
+    except ImportError:
+        return ("Failed: numpy+pillow not installed. Install the optional "
+                "group: `uv sync --extra chimera`")
+    try:
+        gray = Image.open(input_path).convert("L")
+        if normalize:
+            gray = ImageOps.autocontrast(gray, cutoff=1)
+        if supersample == 0:  # auto: working ≈ source (floor keeps working <= source, no upscale)
+            supersample = max(2, gray.height // target_height)
+        ww, wh = target_width * supersample, target_height * supersample
+        work = np.asarray(gray.resize((ww, wh), Image.LANCZOS)).astype(np.int64)
+        # posterize to N evenly-spaced gray levels (the values we CHOSE)
+        lv = np.round(np.linspace(0, 255, levels)).astype(np.int64)
+        idx = np.clip(np.round(work / 255 * (levels - 1)), 0, levels - 1).astype(np.int64)
+        post = lv[idx]
+        # mode downscale: each output px = the most-frequent EXISTING value in its tile
+        out_arr = np.zeros((target_height, target_width), dtype=np.uint8)
+        for y in range(target_height):
+            for x in range(target_width):
+                tile = post[y * supersample:(y + 1) * supersample,
+                            x * supersample:(x + 1) * supersample].ravel()
+                out_arr[y, x] = np.bincount(tile, minlength=256).argmax()
+        Image.fromarray(out_arr).save(out)  # 2D uint8 -> inferred "L" (no deprecated mode arg)
+        vals = np.unique(out_arr)
+        invented = int(np.isin(vals, lv, invert=True).sum())
+    except Exception as e:  # noqa: BLE001 — surface any PIL/numpy failure as a tool error
+        return f"Failed to downscale: {e}"
+    return (f"Block-in {target_width}x{target_height} (K={supersample}, working {ww}x{wh}): "
+            f"{len(vals)} values (levels={[int(v) for v in lv]}), invented={invented} -> {out}")

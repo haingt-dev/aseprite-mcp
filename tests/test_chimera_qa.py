@@ -83,3 +83,47 @@ def test_kcentroid_downscale(base_dir):
 def test_kcentroid_rejects_missing_input():
     assert run(q.kcentroid_downscale(
         "/nonexistent/x.png", f"{BASE}/o.png", 8, 8)).startswith("File")
+
+
+def test_value_blockin_predictable(base_dir):
+    from PIL import Image
+    # a smooth vertical gradient — the exact case kCentroid k-means would mud up
+    src, out = f"{BASE}/vbi_src.png", f"{BASE}/vbi_out.png"
+    img = Image.new("L", (64, 64))
+    for y in range(64):
+        for x in range(64):
+            img.putpixel((x, y), int(y / 63 * 255))
+    img.convert("RGB").save(src)
+    res = ok(run(q.value_blockin_downscale(src, out, 16, 16, levels=5, supersample=2)))
+    assert "16x16" in res
+    assert "invented=0" in res            # the predictability guarantee, self-reported
+    im = Image.open(out)
+    assert im.size == (16, 16)
+    assert len(im.getcolors()) <= 5        # output is a strict subset of the 5 chosen levels
+
+
+def test_value_blockin_auto_supersample(base_dir):
+    from PIL import Image
+    # supersample=0 -> auto K from source/target ratio; here 64/16 = 4
+    src, out = f"{BASE}/vbi_auto_src.png", f"{BASE}/vbi_auto_out.png"
+    img = Image.new("L", (64, 64))
+    for y in range(64):
+        for x in range(64):
+            img.putpixel((x, y), int(y / 63 * 255))
+    img.convert("RGB").save(src)
+    res = ok(run(q.value_blockin_downscale(src, out, 16, 16, levels=4)))  # supersample defaults to 0
+    assert "K=4" in res and "invented=0" in res
+    assert len(Image.open(out).getcolors()) <= 4
+
+
+def test_value_blockin_rejects_bad_levels(base_dir):
+    from PIL import Image
+    src = f"{BASE}/vbi_lv.png"
+    Image.new("RGB", (8, 8), (128, 128, 128)).save(src)
+    assert run(q.value_blockin_downscale(
+        src, f"{BASE}/o.png", 8, 8, levels=1)).startswith("Invalid")
+
+
+def test_value_blockin_rejects_missing_input():
+    assert run(q.value_blockin_downscale(
+        "/nonexistent/x.png", f"{BASE}/o.png", 8, 8)).startswith("File")
